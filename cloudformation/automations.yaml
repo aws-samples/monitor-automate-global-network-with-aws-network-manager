@@ -380,7 +380,7 @@ Resources:
                   
                   logger.info('Create Zip from repo')
                   for i in s3ObjectNames:
-                    dir = './lambda_function' + i +'.py'
+                    dir = './' + i +'.py'
                     s3ObjectFullName = i + '.' + s3ObjectExtension
                     shutil.make_archive(i, s3ObjectExtension,'cloned-repo/lambda_code',dir)
                     logger.info('Created zip from repo. Files in working directory:')
