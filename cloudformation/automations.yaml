@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Serverless Automation - AWS Network Manager
+
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: Email address - if you want to receive SNS notifications
+
+Resources:
+  # ---------- CREATION OF TRANSIT GATEWAY ROUTING ----------
+  # EventBridge Rule
+  TGWRoutingEventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: "nm-tgw-routing"
+      Description: "Capture AWS Network Manager actions (VPC attachment related)."
+      EventPattern:
+        source:
+          - aws.networkmanager
+        detail-type:
+          - "Network Manager Topology Change"
+        detail:
+          changeType:
+            - VPC-ATTACHMENT-CREATED
+            - VPC-ATTACHMENT-DELETED
+      Targets:
+        - Arn: !GetAtt StateMachine.Arn
+          Id: "StateMachine"
+          RoleArn: !GetAtt TGWRoutingStateMachineRole.Arn
+  
+  # Amazon SNS Topic
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      TopicName: nm-sns-topic
+      Subscription: 
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  # AWS Systems Manager parameter
+  TGWRouteTableSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties: 
+      Description: "Transit Gateway Route Table ID"
+      Name: /nm-automation/tgw-route-table
+      Type: String
+      Value: ' '
+
+  # IAM Role - EventBridge to invoke Step Functions state machine
+  TGWRoutingStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: eventbridge-stepfunctions-invoke
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStateMachine
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Ref StateMachine
+
+  # IAM Role - Step Functions state machine to execute the required 
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: state-machine-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowTGWActions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:AssociateTransitGateayRouteTable
+                  - ec2:EnableTransitGatewayRouteTablePropagation
+                Resource: '*'
+        - PolicyName: RetrieveSSMParameter
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - ssm:GetParameter
+                Resource:
+                  !Join
+                    - '/'
+                    - - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter
+                      - !Ref TGWRouteTableSSMParameter
+        - PolicyName: CloudWatchLogsXRayAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+
+  # AWS Step Functions state machine
+  StateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: nm-create-tgw-routing-automation
+      RoleArn: !GetAtt StateMachineRole.Arn
+      DefinitionString: |-
+        {
+          "Comment": "TGW Routing Automation",
+          "StartAt": "ActionType",
+          "States": {
+            "ActionType": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.detail.changeType",
+                  "StringEquals": "VPC-ATTACHMENT-CREATED",
+                  "Next": "GetTGWRouteTable"
+                }
+              ],
+              "Default": "SendNotification"
+            },
+            "GetTGWRouteTable": {
+              "Type": "Task",
+              "Parameters": {
+                "Name": "${SSMParameterName}"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+              "ResultPath": "$.tgw_route_table",
+              "Next": "CreateTGWAssociation"
+            },
+            "CreateTGWAssociation": {
+              "Type": "Task",
+              "Parameters": {
+                "TransitGatewayAttachmentId.$": "States.ArrayGetItem(States.StringSplit($.detail.transitGatewayAttachmentArn, '/'), 1)",
+                "TransitGatewayRouteTableId.$": "$.tgw_route_table.Parameter.Value"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:ec2:associateTransitGatewayRouteTable",
+              "ResultPath": null,
+              "Next": "CreateTGWPropagation"
+            },
+            "CreateTGWPropagation": {
+              "Type": "Task",
+              "Parameters": {
+                "TransitGatewayAttachmentId.$": "States.ArrayGetItem(States.StringSplit($.detail.transitGatewayAttachmentArn, '/'), 1)",
+                "TransitGatewayRouteTableId.$": "$.tgw_route_table.Parameter.Value"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:ec2:enableTransitGatewayRouteTablePropagation",
+              "ResultPath": null,
+              "Next": "SendNotification"
+            },
+            "SendNotification": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${SNSTopic}",
+                "Message.$": "$"
+              },
+              "End": true
+            }
+          }
+        }
+      DefinitionSubstitutions:
+        SSMParameterName: !Ref TGWRouteTableSSMParameter
+        SNSTopic: !Ref SNSTopic
+      TracingConfiguration:
+        Enabled: true
+
+  # ---------- LOGGING VPN ACTIONS IN DYNAMODB ----------
+  # EventBridge Rule
+  VPNActionsEventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: "nm-vpn-actions"
+      Description: "Capture AWS Network Manager actions (VPN related)."
+      EventPattern:
+        source:
+          - aws.networkmanager
+        detail-type:
+          - "Network Manager Topology Change"
+        detail:
+          changeType:
+            - prefix: "VPN-ATTACHMENT-"
+            - prefix: "VPN-CONNECTION-"
+            - prefix: "VPN-TUNNEL-"
+      Targets:
+        - Arn: !GetAtt VPNActionsFunction.Arn
+          Id: "LambdaFunction"
+
+  # Lambda permission (for the EventBridge rule)
+  VPNActionsEventBridgeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref VPNActionsFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt VPNActionsEventBridgeRule.Arn
+  
+  # Lambda Function: IAM Role
+  VPNActionsLambdaFuntionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowDynamoDB
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource:
+                  - !GetAtt DynamoDBTable.Arn 
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # CloudWatch Log Group
+  VPNActionsLambdaFunctionLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: Encryption not required for this log group
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub /aws/lambda/${VPNActionsFunction}
+      RetentionInDays: 7
+
+  # Function
+  VPNActionsFunction:
+    DependsOn: GitRepoToS3CustomResource
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: CWL permissions granted by use of AWSLambdaBasicExecutionRole
+          - id: W89
+            reason: No requirement for this function to be in a VPC
+          - id: W92
+            reason: No requirement to limit simultaneous executions
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Log VPN actions in DynamoDB
+      Runtime: python3.10
+      Timeout: 90
+      Role: !GetAtt VPNActionsLambdaFuntionRole.Arn
+      Handler: vpn_actions_function.lambda_handler
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: lambdacode/vpn_actions_function.zip
+
+  # DynamoDB table
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "network-manager-vpn-actions"
+      AttributeDefinitions: 
+        - AttributeName: "changeType"
+          AttributeType: "S"
+        - AttributeName: "vpn-id"
+          AttributeType: "S"
+      KeySchema: 
+        - AttributeName: "vpn-id"
+          KeyType: "HASH"
+        - AttributeName: "changeType"
+          KeyType: "RANGE"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  # ---------- MOVE PYTHON CODE TO S3 (ZIP FILES) ----------
+  CodeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub 
+        - lambda-code-${AWS::Region}-${AWS::AccountId}-${RandomizedValue}
+        - RandomizedValue:
+            Fn::Select: [0, Fn::Split: [-, Fn::Select: [2, Fn::Split: [/, !Ref AWS::StackId ]]]] # Takes the first part of the random GUID in the cloudformation stacks arn.
+      AccessControl: Private
+
+  GitRepoToS3CustomResource:
+    Type: Custom::GitRepoToS3
+    Properties:
+      ServiceToken: !GetAtt GitRepoToS3Lambda.Arn
+
+  GitRepoToS3LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub ${CodeBucket.Arn}/lambdacode/*
+          PolicyName: PutS3Object
+
+  GitRepoToS3Lambda:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Description: Lambda to be triggered by Cloudformation Custom resource to copy GitHub repo to S3 bucket.
+      Code: 
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+          import shutil
+          import cfnresponse
+          s3 = boto3.client('s3')
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          # Getting Repository link and S3 Bucket
+          repo = os.environ['GitRepo']
+          s3Bucket = os.environ['s3Bucket']
+
+          path = '/tmp/repo' 
+
+          s3ObjectNames = ['vpn_actions_function']
+          s3ObjectExtension = 'zip'
+
+          def lambda_handler(event, context):
+              response_data = {}
+              try:
+                  logger.info('Create path and change working directory to: %s' % (path))
+                  os.mkdir(path)
+                  os.chdir(path)
+                  logger.info('Clone the repository: %s to: %s' % (repo, path))
+                  os.system('git clone ' + repo + ' cloned-repo')
+                  shutil.rmtree('cloned-repo/.git')
+                  logger.info('Clone complete. Files in working directory:')
+                  logger.info(os.listdir(os.getcwd()))
+                  
+                  logger.info('Create Zip from repo')
+                  for i in s3ObjectNames:
+                    dir = './lambda_function' + i +'.py'
+                    s3ObjectFullName = i + '.' + s3ObjectExtension
+                    shutil.make_archive(i, s3ObjectExtension,'cloned-repo/lambda_code',dir)
+                    logger.info('Created zip from repo. Files in working directory:')
+                    logger.info(os.listdir(os.getcwd()))
+                    logger.info('Uploading %s to S3://%s/%s' % (s3ObjectFullName, s3Bucket, 'lambdacode/'+s3ObjectFullName))
+                    s3.upload_file(os.getcwd() + '/' + s3ObjectFullName, s3Bucket, 'lambdacode/'+s3ObjectFullName)
+                  
+                  logger.info('Upload Complete. Cleaning directory')
+                  shutil.rmtree(path)
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              except Exception as e:
+                  logger.error('Execution failed...')
+                  logger.error(str(e))
+                  response_data['Data'] = str(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+      Environment: 
+        Variables:
+          GitRepo: https://github.com/aws-samples/monitor-automate-global-network-with-aws-network-manager
+          s3Bucket: !Ref CodeBucket
+      Handler: index.lambda_handler
+      Runtime: python3.8
+      Layers: 
+        - !Sub arn:aws:lambda:${AWS::Region}:553035198032:layer:git-lambda2:8 # https://github.com/lambci/git-lambda-layer
+      MemorySize: 1024
+      Role: !GetAtt GitRepoToS3LambdaRole.Arn
