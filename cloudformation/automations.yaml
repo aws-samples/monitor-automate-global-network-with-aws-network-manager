@@ -37,15 +37,6 @@ Resources:
         - Endpoint: !Ref EmailAddress
           Protocol: email
 
-  # AWS Systems Manager parameter
-  TGWRouteTableSSMParameter:
-    Type: AWS::SSM::Parameter
-    Properties: 
-      Description: "Transit Gateway Route Table ID"
-      Name: /nm-automation/tgw-route-table
-      Type: String
-      Value: ' '
-
   # IAM Role - EventBridge to invoke Step Functions state machine
   TGWRoutingStateMachineRole:
     Type: AWS::IAM::Role
@@ -92,7 +83,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - ec2:AssociateTransitGateayRouteTable
+                  - ec2:AssociateTransitGatewayRouteTable
                   - ec2:EnableTransitGatewayRouteTablePropagation
                 Resource: '*'
         - PolicyName: RetrieveSSMParameter
@@ -102,11 +93,15 @@ Resources:
               - Effect: Allow
                 Action: 
                   - ssm:GetParameter
-                Resource:
-                  !Join
-                    - '/'
-                    - - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter
-                      - !Ref TGWRouteTableSSMParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nm-automation/tgw-route-table
+        - PolicyName: AllowSNSPublish
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopic
         - PolicyName: CloudWatchLogsXRayAccess
           PolicyDocument:
             Version: 2012-10-17
@@ -152,7 +147,7 @@ Resources:
             "GetTGWRouteTable": {
               "Type": "Task",
               "Parameters": {
-                "Name": "${SSMParameterName}"
+                "Name": "/nm-automation/tgw-route-table"
               },
               "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
               "ResultPath": "$.tgw_route_table",
@@ -190,7 +185,6 @@ Resources:
           }
         }
       DefinitionSubstitutions:
-        SSMParameterName: !Ref TGWRouteTableSSMParameter
         SNSTopic: !Ref SNSTopic
       TracingConfiguration:
         Enabled: true

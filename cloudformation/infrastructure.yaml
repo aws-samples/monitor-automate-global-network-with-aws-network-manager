@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS Transit Gateway network
+Transform: 'AWS::LanguageExtensions'
+
+Mappings:
+  Subnets:
+    Private:
+      a: 10.0.0.0/28
+      b: 10.0.0.16/28
+    Transit:
+      a: 10.0.0.32/28
+      b: 10.0.0.48/28
+
+Resources:
+  # ---------- AWS TRANSIT GATEWAY RESOURCES ----------
+  TransitGateway:
+    Type: AWS::EC2::TransitGateway
+    Properties: 
+      DefaultRouteTableAssociation: disable
+      DefaultRouteTablePropagation: disable
+      Tags: 
+        - Key: Name
+          Value: tgw-nm-automation
+
+  TransitGatewayRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTable
+    Properties: 
+      TransitGatewayId: !Ref TransitGateway
+      Tags: 
+        - Key: Name
+          Value: tgw-rt-nm-automation
+  
+  # AWS Systems Manager parameter
+  TGWRouteTableSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties: 
+      Description: "Transit Gateway Route Table ID"
+      Name: /nm-automation/tgw-route-table
+      Type: String
+      Value: !Ref TransitGatewayRouteTable
+  
+  # ---------- AWS NETWORK MANAGER ----------
+  GlobalNetwork:
+    Type: AWS::NetworkManager::GlobalNetwork
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: global-network-nm-automation
+  
+  TGWNetworkManagerRegistration:
+    Type: AWS::NetworkManager::TransitGatewayRegistration
+    Properties: 
+      GlobalNetworkId: !Ref GlobalNetwork
+      TransitGatewayArn: !Join
+        - "/"
+        - - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway
+          - !Ref TransitGateway
+  
+  # ---------- VPC RESOURCES ----------
+  VPC:
+    Type: AWS::EC2::VPC
+    DependsOn:
+      - TGWNetworkManagerRegistration
+    Properties: 
+      CidrBlock: 10.0.0.0/24
+      Tags: 
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - vpc
+              - !Ref AWS::StackName
+
+  # For::Each iteration: per subnet type (Private, Transit) and AZ (2 AZs)
+  # Resources to create: 4 subnets, 4 route tables, 4 route table associations - obtaining AZ affinity
+  'Fn::ForEach::SubnetTypes':
+    - SubnetType
+    - [Private, Transit]
+    - '${SubnetType}':
+      'Fn::ForEach::AZ':
+        - AvailabilityZone
+        - [a, b]
+          # Subnets
+        - '${SubnetType}Subnet${AvailabilityZone}':
+            Type: AWS::EC2::Subnet
+            Properties:
+              VpcId: !Ref VPC
+              AvailabilityZone: !Sub ${AWS::Region}${AvailabilityZone}
+              CidrBlock: !FindInMap
+                - Subnets
+                - !Ref SubnetType
+                - !Ref AvailabilityZone
+              Tags:
+                - Key: Name
+                  Value: !Join
+                    - '-'
+                    - - !Sub subnet-${SubnetType}-AZ${AvailabilityZone}
+                      - !Ref AWS::StackName
+          # Route Tables
+          '${SubnetType}RouteTable${AvailabilityZone}':
+            Type: AWS::EC2::RouteTable
+            Properties:
+              VpcId: !Ref VPC
+              Tags: 
+                - Key: Name
+                  Value: !Join
+                    - '-'
+                    - - !Sub rt-${SubnetType}-AZ${AvailabilityZone}
+                      - !Ref AWS::StackName
+          # Route Table associations
+          '${SubnetType}RouteTableAssociation${AvailabilityZone}':
+            Type: AWS::EC2::SubnetRouteTableAssociation
+            Properties: 
+              RouteTableId: !Ref
+                'Fn::Sub': '${SubnetType}RouteTable${AvailabilityZone}'
+              SubnetId: !Ref
+                'Fn::Sub': '${SubnetType}Subnet${AvailabilityZone}'
+  
+  # Transit Gateway Attachment
+  TransitGatewayAttachment:
+    Type: AWS::EC2::TransitGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      TransitGatewayId: !Ref TransitGateway
+      SubnetIds:
+        - !Ref TransitSubneta
+        - !Ref TransitSubnetb
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - tgw-attachment
+              - !Ref AWS::StackName
