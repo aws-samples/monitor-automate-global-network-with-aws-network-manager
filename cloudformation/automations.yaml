@@ -37,6 +37,78 @@ Resources:
         - Endpoint: !Ref EmailAddress
           Protocol: email
 
+  # Lambda Function: IAM Role
+  TGWRoutingLambdaFuntionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AllowTGWActions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:AssociateTransitGatewayRouteTable
+                  - ec2:EnableTransitGatewayRouteTablePropagation
+                Resource: '*'
+        - PolicyName: RetrieveSSMParameter
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - ssm:GetParameter
+                Resource: '*'
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # CloudWatch Log Group
+  TGWRoutingLambdaFunctionLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: Encryption not required for this log group
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub /aws/lambda/${TGWRoutingFunction}
+      RetentionInDays: 7
+
+  # Function
+  TGWRoutingFunction:
+    DependsOn: GitRepoToS3CustomResource
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: CWL permissions granted by use of AWSLambdaBasicExecutionRole
+          - id: W89
+            reason: No requirement for this function to be in a VPC
+          - id: W92
+            reason: No requirement to limit simultaneous executions
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Creating Transit Gateway routing
+      Runtime: python3.10
+      Timeout: 90
+      Role: !GetAtt TGWRoutingLambdaFuntionRole.Arn
+      Handler: tgw_routing_function.lambda_handler
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: lambdacode/tgw_routing_function.zip
+      Environment:
+        Variables:
+          PARAMETER_NAME: /nm-automation/tgw-route-table
+
   # IAM Role - EventBridge to invoke Step Functions state machine
   TGWRoutingStateMachineRole:
     Type: AWS::IAM::Role
@@ -357,7 +429,7 @@ Resources:
 
           path = '/tmp/repo' 
 
-          s3ObjectNames = ['vpn_actions_function']
+          s3ObjectNames = ['vpn_actions_function', 'tgw_routing_function']
           s3ObjectExtension = 'zip'
 
           def lambda_handler(event, context):
