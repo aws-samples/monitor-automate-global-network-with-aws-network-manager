@@ -24,7 +24,7 @@ The Lambda functions used in the solution can be found in the [lambda_code](./la
 
 ## Security
 
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+See [CONTRIBUTING](./CONTRIBUTING.md#security-issue-notifications) for more information.
 
 ## License
 
