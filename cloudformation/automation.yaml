@@ -4,7 +4,7 @@ Description: Serverless Automation - AWS Network Manager
 Parameters:
   EmailAddress:
     Type: String
-    Description: Email address - if you want to receive SNS notifications
+    Description: Email address to receive SNS notifications
 
 Resources:
   # ---------- CREATION OF TRANSIT GATEWAY ROUTING ----------
@@ -149,23 +149,14 @@ Resources:
             Action: 
               - sts:AssumeRole
       Policies:
-        - PolicyName: AllowTGWActions
+        - PolicyName: InvokeLambdaFunction
           PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Effect: Allow
                 Action:
-                  - ec2:AssociateTransitGatewayRouteTable
-                  - ec2:EnableTransitGatewayRouteTablePropagation
-                Resource: '*'
-        - PolicyName: RetrieveSSMParameter
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - ssm:GetParameter
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nm-automation/tgw-route-table
+                  - lambda:InvokeFunction
+                Resource: !GetAtt TGWRoutingFunction.Arn
         - PolicyName: AllowSNSPublish
           PolicyDocument:
             Version: 2012-10-17
@@ -211,38 +202,32 @@ Resources:
                 {
                   "Variable": "$.detail.changeType",
                   "StringEquals": "VPC-ATTACHMENT-CREATED",
-                  "Next": "GetTGWRouteTable"
+                  "Next": "CreateTGWRouting"
                 }
               ],
               "Default": "SendNotification"
             },
-            "GetTGWRouteTable": {
+            "CreateTGWRouting": {
               "Type": "Task",
-              "Parameters": {
-                "Name": "/nm-automation/tgw-route-table"
-              },
-              "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
-              "ResultPath": "$.tgw_route_table",
-              "Next": "CreateTGWAssociation"
-            },
-            "CreateTGWAssociation": {
-              "Type": "Task",
-              "Parameters": {
-                "TransitGatewayAttachmentId.$": "States.ArrayGetItem(States.StringSplit($.detail.transitGatewayAttachmentArn, '/'), 1)",
-                "TransitGatewayRouteTableId.$": "$.tgw_route_table.Parameter.Value"
-              },
-              "Resource": "arn:aws:states:::aws-sdk:ec2:associateTransitGatewayRouteTable",
+              "Resource": "arn:aws:states:::lambda:invoke",
               "ResultPath": null,
-              "Next": "CreateTGWPropagation"
-            },
-            "CreateTGWPropagation": {
-              "Type": "Task",
               "Parameters": {
-                "TransitGatewayAttachmentId.$": "States.ArrayGetItem(States.StringSplit($.detail.transitGatewayAttachmentArn, '/'), 1)",
-                "TransitGatewayRouteTableId.$": "$.tgw_route_table.Parameter.Value"
+                "Payload.$": "$",
+                "FunctionName": "${FunctionARN}"
               },
-              "Resource": "arn:aws:states:::aws-sdk:ec2:enableTransitGatewayRouteTablePropagation",
-              "ResultPath": null,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
               "Next": "SendNotification"
             },
             "SendNotification": {
@@ -258,6 +243,7 @@ Resources:
         }
       DefinitionSubstitutions:
         SNSTopic: !Ref SNSTopic
+        FunctionARN: !GetAtt TGWRoutingFunction.Arn
       TracingConfiguration:
         Enabled: true
 

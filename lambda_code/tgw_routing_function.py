@@ -5,8 +5,9 @@ import os
 def lambda_handler(event, context):
     try:
         # Obtaining information from the event
-        region = event['region']
-        tgw_attachment = event['transitGatewayAttachmentArn'].split('/')[1]
+        region = event['detail']['transitGatewayAttachmentArn'].split(':')[3]
+        tgw_attachment = event['detail']['transitGatewayAttachmentArn'].split('/')[1]
+        
         # Obtaining SSM Parameter name from environment variables
         parameter = os.environ['PARAMETER_NAME']
         
@@ -15,7 +16,7 @@ def lambda_handler(event, context):
         ec2 = boto3.client('ec2', region_name=region)
 
         # Obtaining the Transit Gateway route table ID from Systems Manager Parameter Store
-        tgw_rt = ssm.get_parameter( Name=parameter)
+        tgw_rt = ssm.get_parameter(Name=parameter)['Parameter']['Value']
 
         # We create Transit Gateway association and propagation to the route table
         tgw_association = ec2.associate_transit_gateway_route_table(
@@ -27,12 +28,14 @@ def lambda_handler(event, context):
             TransitGatewayAttachmentId=tgw_attachment
         )['Propagation']['ResourceId']
         
+        response = {
+            'transitGatewayAssociationId': tgw_association,
+            'transitGatewayPropagationId': tgw_propagation
+        }
+
         return {
             'statusCode': 200,
-            'body': {
-                'transitGatewayAssociationId': tgw_association,
-                'transitGatewayPropagationId': tgw_propagation
-            }
+            'body': json.dumps(response)
         }
     
     except Exception as e:
