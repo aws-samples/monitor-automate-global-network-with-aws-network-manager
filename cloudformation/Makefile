@@ -1,8 +1,7 @@
 .PHONY: deploy undeploy
 
-INFRASTRUCTURE_REGION ?= eu-west-1
-EMAIL_ADDRESS ?= pablosc@amazon.es
-#EMAIL_ADDRESS ?= <EMAIL>
+INFRASTRUCTURE_REGION ?= <AWS_REGION>
+EMAIL_ADDRESS ?= <EMAIL>
 SOLUTION_STACK_NAME ?= nm-automation-solution
 INFRASTRUCTURE_STACK_NAME ?= nm-automation-infra
 
