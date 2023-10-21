@@ -337,6 +337,9 @@ Resources:
       Code:
         S3Bucket: !Ref CodeBucket
         S3Key: lambdacode/vpn_actions_function.zip
+      Environment:
+        Variables:
+          TABLE_NAME: "network-manager-vpn-actions"
 
   # DynamoDB table
   DynamoDBTable:
