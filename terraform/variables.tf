@@ -6,15 +6,11 @@
 variable "infrastructure_region" {
   type        = string
   description = "AWS Region to build the Transit gateway network."
-
-  default = "eu-west-1"
 }
 
 variable "email_address" {
   type        = string
   description = "Email Address - to receive SNS topic notifications."
-
-  default = "pablosc@amazon.es"
 }
 
 variable "deploy_vpc" {
