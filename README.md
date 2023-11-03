@@ -9,7 +9,7 @@ From the [events](https://docs.aws.amazon.com/network-manager/latest/tgwnm/monit
 * From [AWS Transit gateway](https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html) VPC attachments created, an [AWS Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html) state machine automates the creation of associations and propagations to a Transit gateway route table.
     * An [AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html) function takes care of obtaining the information of the Transit gateway route table to create the routing - information provided by an [AWS Systems Manager parameter](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) - and creates the association and propagation of the newly created VPC attachment.
     * An [Amazon SNS](https://docs.aws.amazon.com/sns/latest/dg/welcome.html) topic sends a notification to notify the newly VPC attachment.
-* From [AWS Site-to-Site VPN](https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html) connections, a Lambda function tracks all the related VPN actions into an [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table.
+* From [AWS Site-to-Site VPN](https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html) connections, a Lambda function tracks all the related VPN events into an [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table.
 
 The Lambda functions used in the solution can be found in the [lambda_code](./lambda_code/) folder. In addition, with the solution code, we provide an example implementation of a Transit gateway network (with VPC and VPN attachments) for testing purposes.
 
@@ -21,6 +21,7 @@ The Lambda functions used in the solution can be found in the [lambda_code](./la
     * You can deploy Transit gateways in the same Account as the global network and the solution, and create the VPC attachments in other Accounts (Transit gateway should be shared using [AWS RAM](https://docs.aws.amazon.com/ram/latest/userguide/what-is.html)). Site-to-Site VPN connections need to be created in the same Account as the Transit gateway.
     * You can deploy Transit gateways in a different Account in the same Organization. In this pattern, you need to change SSM Parameter Store by [AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) to share between Accounts the information about the Transit gateway route tables.
 * Remember that, to monitor and obtain events of Transit gateways in Network Manager, you need to [register them](https://docs.aws.amazon.com/network-manager/latest/tgwnm/tgw-registrations.html).
+* To test the VPN events automation, you can use the following [VPN Gateway StrongSwan repository](https://github.com/aws-samples/vpn-gateway-strongswan).
 
 ## Security
 
