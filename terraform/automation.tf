@@ -443,6 +443,8 @@ resource "aws_cloudwatch_log_group" "vpnactions_lambda_log_group" {
 
 # DynamoDB Table
 resource "aws_dynamodb_table" "dynamodb_table" {
+  provider = aws.awsoregon
+  
   name           = "network-manager-vpn-actions"
   read_capacity  = 1
   write_capacity = 1
